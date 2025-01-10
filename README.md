@@ -4,5 +4,5 @@
 
 Download all code, edit with visual studio code and compile with latest version of easyface from m0tral https://github.com/m0tral/EasyFace
 
-To upload to your band you must use latest mi-fitness modified apk from @m0tral group in telegram MiFitness mod (thanks to @m0tral for his great work) and synchronize with your band (uninstall official mifitness if necessary).
+To upload to your band you must use latest mi-fitness modified apk from @m0tral group in telegram MiFitness mod (thanks to @m0tral for his great work) and synchronize with your band (uninstall official mifitness if necessary). Before you must ask for watchface developer in telegram group.
 
