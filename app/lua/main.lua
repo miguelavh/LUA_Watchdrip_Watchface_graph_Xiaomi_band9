@@ -11,6 +11,11 @@ local T_WIDTH = 50
 local T_HEIGHT = 94
 local T_SPACE = 10
 local oldtimeValue = 0
+-- How often (seconds) to look for a new reading while the screen is on. A check
+-- is a file read plus a timestamp match; the full JSON parse only runs when the
+-- reading has changed.
+local BG_CHECK_SECONDS = 5
+local lastBgCheck = 0
 --local indexGraph = 0
 
 local dateline = (DH/2)+T_HEIGHT+(T_SPACE/2)+12
@@ -154,6 +159,9 @@ local function findString(texto,patron)
 end
 
 local function paintTextObjectLeft(watchface,objeto,ruta,x, y, width,texto)
+    local key = ruta .. "|" .. texto
+    if objeto._k == key then return end
+    objeto._k = key
     local iterator=1
     while iterator<=#objeto do
         objeto[iterator].widget:add_flag(lvgl.FLAG.HIDDEN)
@@ -171,6 +179,9 @@ local function paintTextObjectLeft(watchface,objeto,ruta,x, y, width,texto)
 end
 
 local function paintTextObjectRight(watchface,objeto,ruta,x, y, width,texto)
+    local key = ruta .. "|" .. texto
+    if objeto._k == key then return end
+    objeto._k = key
     local iterator=1
     while iterator<=#objeto do
         objeto[iterator].widget:add_flag(lvgl.FLAG.HIDDEN)
@@ -189,6 +200,9 @@ local function paintTextObjectRight(watchface,objeto,ruta,x, y, width,texto)
 end
 
 local function paintTextObject(watchface,objeto,ruta,x,y,width,widthSeparador,separador,posSeparador,texto)
+    local key = ruta .. "|" .. texto
+    if objeto._k == key then return end
+    objeto._k = key
 
     local diferencia=#objeto-string.len(texto)
     local iterator=1
@@ -245,16 +259,10 @@ local function paintTextObject(watchface,objeto,ruta,x,y,width,widthSeparador,se
 end
 
 local function clearGraph(watchface)
-    if watchface.graph.widgets~=nil then
-        local iterator=#watchface.graph.widgets
-        while iterator>=1 do
-            local punto=watchface.graph.widgets[iterator]
-            punto:add_flag(lvgl.FLAG.HIDDEN)
-            table.remove(watchface.graph.widgets,iterator)
-            iterator=iterator-1
-        end
-        watchface.graphObject:clean()
-    end
+    local pool = watchface.graphPool
+    if pool == nil then return end
+    for i = 1, pool.used do pool[i]:add_flag(lvgl.FLAG.HIDDEN) end
+    pool.used = 0
 end
 
 local Colors = {
@@ -300,11 +308,21 @@ local function createWidget(watchface, x, y, pointStyle)
         pad_all = 0,
     }
 
-    local widget = lvgl.Object(watchface.graphObject, property)
-    --indexGraph=#watchface.padre
-    widget:clear_flag(lvgl.FLAG.SCROLLABLE)
-    if widget~=nil and watchface.graph~=nil and watchface.graph.widgets~=nil then
-        table.insert(watchface.graph.widgets, widget)
+    -- Reuse a pool of point objects instead of allocating new ones every reading.
+    local pool = watchface.graphPool
+    if pool == nil then
+        pool = { used = 0 }
+        watchface.graphPool = pool
+    end
+    pool.used = pool.used + 1
+    local widget = pool[pool.used]
+    if widget == nil then
+        widget = lvgl.Object(watchface.graphObject, property)
+        widget:clear_flag(lvgl.FLAG.SCROLLABLE)
+        pool[pool.used] = widget
+    else
+        widget:set(property)
+        widget:clear_flag(lvgl.FLAG.HIDDEN)
     end
 end
 
@@ -318,15 +336,32 @@ local function drawPoint(watchface, x, y, pointStyle)
     createWidget(watchface, x, y, pointStyle)
 end
 
-local function drawLine(watchface, x, y, pointStyle)
+local function drawLine(watchface, x, y, pointStyle, lineName)
 
     --log(watchface,string.format("Leida linea1 %s %s %d %d", type(pointStyle.width), type(pointStyle.height),pointStyle.width,pointStyle.height))
     if y < watchface.graph.y or y > watchface.graph.yBound then
         return
     end
     pointStyle.width = watchface.graph.width
-    --log(watchface,string.format("Leida linea2 %s %s %d %d", type(pointStyle.width), type(pointStyle.height),pointStyle.width,pointStyle.height))
-    createWidget(watchface.graph, x, y, pointStyle)
+    -- createWidget(watchface.graph, ...) created each line with a nil parent on
+    -- every reading and never removed it, so lines piled up on screen. Keep one
+    -- object per line (still drawn on top) and move it instead.
+    local lines = watchface.lineObjs
+    if lines == nil then
+        lines = {}
+        watchface.lineObjs = lines
+    end
+    local prop = { x = watchface.graph.x, y = y, w = watchface.graph.width, h = pointStyle.height,
+        radius = 0, bg_opa = lvgl.OPA(100), bg_color = pointStyle.color, border_width = 0, pad_all = 0 }
+    local o = lines[lineName]
+    if o == nil then
+        o = lvgl.Object(watchface.padre, prop)
+        o:clear_flag(lvgl.FLAG.SCROLLABLE)
+        lines[lineName] = o
+    else
+        o:set(prop)
+        o:clear_flag(lvgl.FLAG.HIDDEN)
+    end
 end
 
 local function drawElement(watchface, x, y, pointStyle, lineName)
@@ -335,7 +370,7 @@ local function drawElement(watchface, x, y, pointStyle, lineName)
     if string.find(lineName,"line")==nil then
         drawPoint(watchface,xPos, yPos, pointStyle)
     else
-        drawLine(watchface,xPos, yPos, pointStyle)
+        drawLine(watchface,xPos, yPos, pointStyle, lineName)
     end
 end
 
@@ -494,7 +529,17 @@ local function updateBGValue(watchface)
     if file then
         local content = file:read("*all")
         file:close()
-        local t = lunajson.decode(content)
+        -- Same reading as last time: only the "x mins ago" text can change.
+        local quick = tonumber(content:match('"bg"%s*:%s*{[^}]-"time"%s*:%s*(%d+)'))
+        if quick ~= nil and quick == oldtimeValue then
+            local posQ=getItemsTimeBGPosition();
+            paintTextObject(watchface,watchface.timeBG,"images/numTimeBG/%s.png",posQ.timeXY[1],posQ.timeXY[2],19,0,"",0,getTimeStr(quick))
+            return
+        end
+        local ok, t = pcall(lunajson.decode, content)
+        if not ok or type(t) ~= "table" or type(t["bg"]) ~= "table" or type(t["status"]) ~= "table" then
+            return
+        end
 
         local timeValue = t["bg"]["time"]
         local textTime=getTimeStr(timeValue)
@@ -543,6 +588,7 @@ local function updateBGValue(watchface)
         paintTextObjectLeft(watchface,watchface.phoneBatteryValue,"images/status_numbig/%s.png",37,490-104, 14,valueText)
 
         paintGraph(watchface,t)
+        collectgarbage()
     else
         watchface.bg[1].widget:add_flag(lvgl.FLAG.HIDDEN)
         watchface.bg[2].widget:add_flag(lvgl.FLAG.HIDDEN)
@@ -625,7 +671,6 @@ local function entry()
         second = second & 0x01 -- take a low bit of second, odd/even
         if second == 0 then
             obj:clear_flag(lvgl.FLAG.HIDDEN)
-            updateBGValue(watchface);
         else
             obj:add_flag(lvgl.FLAG.HIDDEN)
         end
@@ -763,7 +808,26 @@ local function entry()
         --log(watchface,valueText)
         paintTextObjectRight(watchface,watchface.batValue,"images/status_numbig/%s.png",192-72, 490-104, 14,valueText)
     end)
+    -- Look for a new reading every BG_CHECK_SECONDS while the screen is on
+    -- (previously every 2 s, with a full JSON parse each time).
+    dataman.subscribe("timeSecondLow", watchface.timeDelim.widget, function(obj, value)
+        if os.time() - lastBgCheck >= BG_CHECK_SECONDS then
+            lastBgCheck = os.time()
+            updateBGValue(watchface)
+        end
+    end)
+
+    -- And straight away when the screen wakes.
+    pageOnResume = function()
+        lastBgCheck = os.time()
+        updateBGValue(watchface)
+    end
+
+    lastBgCheck = os.time()
     updateBGValue(watchface);
 end
+
+pageOnPause = function() end
+pageOnResume = function() end
 
 entry()
