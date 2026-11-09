@@ -423,6 +423,16 @@ local function paintGraph(watchface,watchdripData)
     local TREATMENT_POINT_SIZE = GRAPH_SETTINGS.treatment_point_size
     local LINE_SIZE = GRAPH_SETTINGS.line_size
 
+    if (watchdripData["graph"] == nil or watchdripData["graph"]["start"]==nil) then
+        if(watchface.nograph==nil) then
+            watchface.nograph=Image(watchface.padre, "images/nograph.png", {GRAPH_SETTINGS.x, GRAPH_SETTINGS.y})
+        else
+            watchface.nograph.widget:clear_flag(lvgl.FLAG.HIDDEN)
+        end
+        return
+    elseif watchface.nograph~=nil and watchdripData["graph"] ~= nil then
+        watchface.nograph.widget:add_flag(lvgl.FLAG.HIDDEN)
+    end
     watchface.graph.graphLineStyles['predict'] = {width=POINT_SIZE, height=POINT_SIZE, radius=POINT_SIZE,imageFile="",color = ""}
     watchface.graph.graphLineStyles['high'] = {width=POINT_SIZE, height=POINT_SIZE, radius=POINT_SIZE, imageFile="",color = ""}
     watchface.graph.graphLineStyles['low'] = {width=POINT_SIZE, height=POINT_SIZE, radius=POINT_SIZE, imageFile="",color = ""}
@@ -431,9 +441,6 @@ local function paintGraph(watchface,watchdripData)
     watchface.graph.graphLineStyles['lineHigh'] = {width=0, height=LINE_SIZE, radius=0, imageFile="",color = ""};
 --    log(watchface,"paintGraph Creados formatos de Linea")
 
-    if (watchdripData["graph"]["start"]==nil) then
-        return
-    end
 --    log(watchface,"paintGraph Hay datos de grafica")
 
     local isMgdl=watchdripData["status"]["isMgdl"]
@@ -483,73 +490,84 @@ end
 
 
 local function updateBGValue(watchface)
-
-    local file=io.open("//data/quickapp/files/com.thatguysservice.huami_xdrip/info.json","r");
-    if file then
-        local g=1
-    else
-        file=io.open("//data/quickapp/files/com.application.watch.watchdrip/info.json","r");
-    end
-
-    if file then
-        local content = file:read("*all")
-        file:close()
-        local t = lunajson.decode(content)
-
-        local timeValue = t["bg"]["time"]
-        local textTime=getTimeStr(timeValue)
-        local posTime=getItemsTimeBGPosition();
-        paintTextObject(watchface,watchface.timeBG,"images/numTimeBG/%s.png",posTime.timeXY[1],posTime.timeXY[2],19,0,"",0,textTime)
-        if timeValue == oldtimeValue then
-            return;
+    local status, err = pcall(function()
+        local file=io.open("//data/quickapp/files/com.thatguysservice.huami_xdrip/info.json","r");
+        if not file then
+            file=io.open("//data/quickapp/files/com.application.watch.watchdrip/info.json","r");
         end
-        oldtimeValue=timeValue
 
-        local bgValue=t["bg"]["val"]
-        local isMgdl=t["status"]["isMgdl"]
-        local phoneBat=t["status"]["bat"]
-        local isHigh=t["bg"]["isHigh"]
-        local isLow=t["bg"]["isLow"]
-        local trend=t["bg"]["trend"]
+        if file then
+            local content = file:read("*all")
+            file:close()
+            local t = lunajson.decode(content)
 
-        local src = string.format("images/arrows/%s.png", trend)
-        watchface.arrowTrend.widget:set { src = imgPath(src) }
+            local timeValue = t["bg"]["time"]
+            local isStaleValue = t["bg"]["isStale"]
+            local textTime=getTimeStr(timeValue)
+            local posTime=getItemsTimeBGPosition();
+            paintTextObject(watchface,watchface.timeBG,"images/numTimeBG/%s.png",posTime.timeXY[1],posTime.timeXY[2],19,0,"",0,textTime)
 
-        local delta = t["bg"]["delta"]
-        local posDelta=getItemsDeltaPosition();
-        paintTextObject(watchface,watchface.delta,"images/numDelta/%s.png",posDelta.deltaXY[1],posDelta.deltaXY[2],16,7,".",4,delta)
+            local tm =  os.time() - (timeValue/1000)
+            if isStaleValue or tm > (13*60) then
+                watchface.stale.widget:clear_flag(lvgl.FLAG.HIDDEN)
+            else
+                watchface.stale.widget:add_flag(lvgl.FLAG.HIDDEN)
+            end
 
-        local posBG = getItemsBGPosition();
+            if timeValue == oldtimeValue then
+                return;
+            end
+            oldtimeValue=timeValue
 
-        if isHigh then
-            paintTextObject(watchface,watchface.bg,"images/bgNumHigh/%s.png",posBG.bgXY[1],posBG.bgXY[2],32,17,".",3,bgValue)
-        elseif isLow then
-            paintTextObject(watchface,watchface.bg,"images/bgNumLow/%s.png",posBG.bgXY[1],posBG.bgXY[2],32,17,".",3,bgValue)
+            local bgValue=t["bg"]["val"]
+            local isMgdl=t["status"]["isMgdl"]
+            local phoneBat=t["status"]["bat"]
+            local isHigh=t["bg"]["isHigh"]
+            local isLow=t["bg"]["isLow"]
+            local trend=t["bg"]["trend"]
+
+            local src = string.format("images/arrows/%s.png", trend)
+            watchface.arrowTrend.widget:set { src = imgPath(src) }
+            watchface.arrowTrend.widget:clear_flag(lvgl.FLAG.HIDDEN)
+
+            local delta = t["bg"]["delta"]
+            local posDelta=getItemsDeltaPosition();
+            paintTextObject(watchface,watchface.delta,"images/numDelta/%s.png",posDelta.deltaXY[1],posDelta.deltaXY[2],16,7,".",4,delta)
+
+            local posBG = getItemsBGPosition();
+
+            if isHigh then
+                paintTextObject(watchface,watchface.bg,"images/bgNumHigh/%s.png",posBG.bgXY[1],posBG.bgXY[2],32,17,".",3,bgValue)
+            elseif isLow then
+                paintTextObject(watchface,watchface.bg,"images/bgNumLow/%s.png",posBG.bgXY[1],posBG.bgXY[2],32,17,".",3,bgValue)
+            else
+                paintTextObject(watchface,watchface.bg,"images/bgNum/%s.png",posBG.bgXY[1],posBG.bgXY[2],32,17,".",3,bgValue)
+            end
+
+            --paintTextObject(watchface,watchface.delta,"images/numDelta/%s.png",posDelta.deltaXY[1],posDelta.deltaXY[2],18,7,".",4,delta)
+
+            local valor=phoneBat;
+            local arc=math.floor(valor*0.17)
+            if arc>17 then
+                arc=17
+            end
+            local srcArc = string.format("images/arcs/blue%d.png", arc)
+            watchface.phoneBatteryArc.widget:set { src = imgPath(srcArc) }
+            local valueText = string.format("%d", math.floor(valor))
+
+            paintTextObjectLeft(watchface,watchface.phoneBatteryValue,"images/status_numbig/%s.png",37,490-104, 14,valueText)
+            paintGraph(watchface,t)
         else
-            paintTextObject(watchface,watchface.bg,"images/bgNum/%s.png",posBG.bgXY[1],posBG.bgXY[2],32,17,".",3,bgValue)
+            watchface.bg[1].widget:add_flag(lvgl.FLAG.HIDDEN)
+            watchface.bg[2].widget:add_flag(lvgl.FLAG.HIDDEN)
+            watchface.bg[3].widget:add_flag(lvgl.FLAG.HIDDEN)
+            watchface.bg[4].widget:add_flag(lvgl.FLAG.HIDDEN)
+            watchface.arrowTrend.widget:add_flag(lvgl.FLAG.HIDDEN)
         end
-
-        --paintTextObject(watchface,watchface.delta,"images/numDelta/%s.png",posDelta.deltaXY[1],posDelta.deltaXY[2],18,7,".",4,delta)
-
-        local valor=phoneBat;
-        local arc=math.floor(valor*0.17)
-        if arc>17 then
-            arc=17
-        end
-        local srcArc = string.format("images/arcs/blue%d.png", arc)
-        watchface.phoneBatteryArc.widget:set { src = imgPath(srcArc) }
-        local valueText = string.format("%d", math.floor(valor))
-
-        paintTextObjectLeft(watchface,watchface.phoneBatteryValue,"images/status_numbig/%s.png",37,490-104, 14,valueText)
-
-        paintGraph(watchface,t)
-    else
-        watchface.bg[1].widget:add_flag(lvgl.FLAG.HIDDEN)
-        watchface.bg[2].widget:add_flag(lvgl.FLAG.HIDDEN)
-        watchface.bg[3].widget:add_flag(lvgl.FLAG.HIDDEN)
-        watchface.bg[4].widget:add_flag(lvgl.FLAG.HIDDEN)
-        watchface.arrowTrend.widget:add_flag(lvgl.FLAG.HIDDEN)
-    end
+    end);
+    --if not status then
+    --    print("Caught an error: " .. err)
+    --end    
 end
 
 local function entry()
@@ -661,12 +679,18 @@ local function entry()
     watchface.weatherIcon =Image(root, "images/weather/3.png", {76, 25+10})
     dataman.subscribe("weatherCurrentWeather", watchface.weatherIcon.widget, function(obj, value)
         local src = string.format("images/weather/%d.png", value // 256)
+        if (value // 256)<0 or (value // 256)>19 then
+            src = "images/weather/18.png"
+        end
         obj:set { src = imgPath(src) }
     end)
 
     watchface.weatherValue = {Image(root, "images/weather_numbers/minus.png", { posWeather.weaXY[1], posWeather.weaXY[2] }),Image(root, "images/weather_numbers/0.png", { posWeather.weaXY[1]+17, posWeather.weaXY[2] }),Image(root, "images/weather_numbers/0.png", { posWeather.weaXY[1]+34, posWeather.weaXY[2] }),Image(root, "images/weather_numbers/degree.png", { posWeather.weaXY[1]+51, posWeather.weaXY[2] })}
     dataman.subscribe("weatherCurrentTemperature", watchface.weatherIcon.widget, function(obj, value)
         local valueText = string.format("%dw", value // 256)
+        if(value//256)>400 then
+            valueText="";
+        end
         paintTextObject(watchface,watchface.weatherValue,"images/weather_numbers/%s.png",posWeather.weaXY[1], posWeather.weaXY[2],17,0,"",0,valueText)
     end)
 
@@ -764,6 +788,10 @@ local function entry()
         paintTextObjectRight(watchface,watchface.batValue,"images/status_numbig/%s.png",192-72, 490-104, 14,valueText)
     end)
     updateBGValue(watchface);
+
+    watchface.stale = Image(root, "images/stale.png", posBG.bgXY)
+    watchface.stale.widget:add_flag(lvgl.FLAG.HIDDEN)
+
 end
 
 entry()
